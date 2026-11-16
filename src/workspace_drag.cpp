@@ -13,8 +13,10 @@
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/render/pass/RectPassElement.hpp>
+#include <hyprland/src/render/pass/TexPassElement.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <linux/input-event-codes.h>
 #include <hyprland/src/managers/SessionLockManager.hpp>
 
@@ -71,13 +73,33 @@ void restore_window(const WindowMove& move, const PHLWORKSPACE& workspace) {
     presentation.alpha(Desktop::View::WINDOW_ALPHA_MOVE_FROM_WORKSPACE)->setValueAndWarp(1.f);
 }
 
-void draw_rect(Render::CRenderContext& ctx, const CBox& box, const CHyprColor& color) {
+void draw_rect(Render::CRenderContext& ctx, const CBox& box, const CHyprColor& color, int rounding = 0) {
     if (box.empty())
         return;
     CRectPassElement::SRectData data;
     data.box = box;
     data.color = color;
+    data.round = rounding;
     IHyprRenderer::addPassElement(ctx, makeUnique<CRectPassElement>(data));
+}
+
+void draw_swap_handle(Render::CRenderContext& ctx, const CBox& handle) {
+    if (handle.empty())
+        return;
+
+    // Reuse one glyph texture and fit it to the handle on each output.
+    static const auto glyph = g_pHyprRenderer->renderText("⇄", CHyprColor{0xfff5f7fa}, 32,
+                                                         false, "", 0, 700);
+    if (!glyph || glyph->m_size.x <= 0 || glyph->m_size.y <= 0)
+        return;
+
+    draw_rect(ctx, handle, CHyprColor{0xdd20242c}, std::lround(handle.w * .24));
+    const double scale = .72 * std::min(handle.w / glyph->m_size.x, handle.h / glyph->m_size.y);
+    const auto size = glyph->m_size * scale;
+    CTexPassElement::SRenderData icon;
+    icon.tex = glyph;
+    icon.box = CBox{handle.middle() - size / 2, size};
+    IHyprRenderer::addPassElement(ctx, makeUnique<CTexPassElement>(std::move(icon)));
 }
 }
 
@@ -262,7 +284,9 @@ void HTManager::render_workspace_handles(Render::CRenderContext& ctx, const PHTV
     const auto cursor = get_view_from_cursor();
     const auto pointer = g_pInputManager->getMouseCoordsInternal();
     const bool dragging = workspace_press && workspace_press->dragging;
-    const auto hovered_id = cursor == view ? view->layout->get_ws_id_from_global(pointer) : WORKSPACE_INVALID;
+    const auto hovered_id = cursor == view && view->layout->should_manage_mouse()
+        ? view->layout->get_ws_id_from_global(pointer)
+        : WORKSPACE_INVALID;
     const bool valid = dragging && can_swap_tiles(get_view_from_id(workspace_press->monitor), workspace_press->workspace, view, hovered_id);
     const CBox output{{0, 0}, monitor->m_transformedSize};
 
@@ -270,18 +294,14 @@ void HTManager::render_workspace_handles(Render::CRenderContext& ctx, const PHTV
         if (id <= 0 || layout.box.intersection(output).empty())
             continue;
         const bool source = dragging && view->monitor_id == workspace_press->monitor && id == workspace_press->workspace;
-        const bool hovered = dragging && id == hovered_id;
-        const CHyprColor accent = source ? CHyprColor{0xfff3be6f} : hovered
-            ? (valid ? CHyprColor{0xff79e6ad} : CHyprColor{0xfff47777}) : CHyprColor{0xc0ffffff};
-
-        if (hovered || source)
+        const bool pointer_over_tile = id == hovered_id;
+        if (source || (dragging && pointer_over_tile)) {
+            const CHyprColor accent = source ? CHyprColor{0xfff3be6f}
+                : (valid ? CHyprColor{0xff79e6ad} : CHyprColor{0xfff47777});
             draw_rect(ctx, CBox{layout.box.x, layout.box.y, layout.box.w, 3 * monitor->m_scale}, accent);
-
-        const auto handle = workspace_handle(layout.box, monitor->m_scale);
-        draw_rect(ctx, handle, CHyprColor{0xdd20242c});
-        for (int line = 1; line <= 3; ++line)
-            draw_rect(ctx, CBox{handle.x + handle.w * .22, handle.y + handle.h * line / 4,
-                                handle.w * .56, std::max(1.0, handle.h * .08)}, accent);
+        }
+        if (pointer_over_tile)
+            draw_swap_handle(ctx, workspace_handle(layout.box, monitor->m_scale));
     }
 
     if (dragging && cursor == view && hovered_id == WORKSPACE_INVALID) {

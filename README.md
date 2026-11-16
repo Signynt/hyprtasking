@@ -118,6 +118,8 @@ hyprctl plugin load "$(realpath libhyprtasking.so)"
       workspace names such as `A1` instead of the keyboard jump labels.
 - Window management:
     - **Left click** to drag and drop windows around
+    - Hover over a workspace tile and drag the swap arrows in its upper-right corner
+      onto another tile to exchange workspace contents.
 
 ## Configuration
 
