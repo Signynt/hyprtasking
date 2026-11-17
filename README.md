@@ -151,6 +151,7 @@ hl.config({
   plugin = {
     hyprtasking = {
       layout = "grid",
+      smooth_preview_scaling = false,
 
       gap_size = 10,
       bg_color = 0xff26233a,
@@ -321,6 +322,7 @@ All options are prefixed with `plugin:hyprtasking:`.
 | Option | Type | Description | Default |
 | --- | --- | --- | --- |
 | `layout` | `string` | The layout to use, either `grid` or `linear` | `grid` |
+| `smooth_preview_scaling` | `int` | Filter downscaled overview surfaces. Uses trilinear mipmaps for compatible shared-memory textures on GLES 3.2 and bilinear filtering elsewhere. Mipmap generation adds GPU work while the overview is open. | `false` |
 | `bg_color` | `int` | The color of the background of the overlay | `0x000000FF` |
 | `gap_size` | `float` | The width in logical pixels of the gaps between workspaces | `8.f` |
 | `border_size` | `float` | The width in logical pixels of the borders around workspaces | `4.f` |

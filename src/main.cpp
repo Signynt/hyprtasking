@@ -1,6 +1,7 @@
 #include <linux/input-event-codes.h>
 
 #include <cmath>
+#include <optional>
 
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/SharedDefs.hpp>
@@ -266,6 +267,54 @@ static bool ht_scaled_render(CRenderContext& ctx) {
     return view != nullptr && view->navigating;
 }
 
+class CPreviewTextureFilter {
+  public:
+    CPreviewTextureFilter(CRenderContext& ctx, Render::ITexture& texture, bool cropped)
+        : ctx(ctx), texture(texture), nearest(ctx.m_data.useNearestNeighbor),
+          min_filter(texture.minFilter), mag_filter(texture.magFilter) {
+        ctx.m_data.useNearestNeighbor = false;
+        texture.minFilter = texture.magFilter = GL_LINEAR;
+        // Imported textures can have EGLImage restrictions. Limit mipmaps
+        // to compositor-owned 2D uploads and avoid sampling outside viewports.
+        if (cropped || !texture.m_isSynchronous || texture.isDMA()
+            || (texture.m_type != Render::TEXTURE_RGBA && texture.m_type != Render::TEXTURE_RGBX)
+            || texture.m_size.x <= 0 || texture.m_size.y <= 0
+            || Render::GL::g_pHyprOpenGL->m_eglContextVersion < Render::GL::CHyprOpenGLImpl::EGL_CONTEXT_GLES_3_2)
+            return;
+
+        // Client buffers can change in place, so refresh the mip chain before
+        // sampling it. Use the actual GL format because SHM textures do not
+        // retain a DRM format on ITexture.
+        GLint previous_binding = 0;
+        GLint format = 0;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous_binding);
+        texture.bind();
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &format);
+        if (format == GL_RGBA8 || format == GL_RGB8 || format == GL_SRGB8_ALPHA8) {
+            glGenerateMipmap(GL_TEXTURE_2D);
+            texture.minFilter = GL_LINEAR_MIPMAP_LINEAR;
+        }
+        glBindTexture(GL_TEXTURE_2D, previous_binding);
+    }
+
+    CPreviewTextureFilter(const CPreviewTextureFilter&) = delete;
+    CPreviewTextureFilter& operator=(const CPreviewTextureFilter&) = delete;
+
+    ~CPreviewTextureFilter() {
+        // Hyprland applies these values to GL again on the next draw.
+        texture.minFilter = min_filter;
+        texture.magFilter = mag_filter;
+        ctx.m_data.useNearestNeighbor = nearest;
+    }
+
+  private:
+    CRenderContext& ctx;
+    Render::ITexture& texture;
+    const bool nearest;
+    const GLenum min_filter;
+    const GLenum mag_filter;
+};
+
 // Hyprland applies the active renderModif to a texture's quad, but NOT to any of the
 // regions it derives the per-surface scissor from. renderTextureInternal scissors to
 // ctx.m_data.clipBox / data.clipRegion when either is set, else to data.damage --
@@ -288,6 +337,16 @@ static void hook_render_texture(
     if (!ht_scaled_render(ctx) || render_data.pMonitor == nullptr) {
         ((render_texture_t)(render_texture_hook->m_original))(thisptr, ctx, tex, box, data);
         return;
+    }
+
+    std::optional<CPreviewTextureFilter> filter;
+    if (data.surface && !ctx.m_gl.applyFinalShader && render_modif.combinedScale() < 1.f
+        && HTConfig::value<Config::INTEGER>("smooth_preview_scaling")) {
+        const auto view = ht_manager->get_view_from_monitor(render_data.pMonitor.lock());
+        if (view && (view->active || view->navigating)) {
+            const bool cropped = data.allowCustomUV && data.primarySurfaceUVTopLeft != Vector2D(-1, -1);
+            filter.emplace(ctx, *tex, cropped);
+        }
     }
 
     CRegion full_damage;
@@ -726,6 +785,7 @@ static void add_dispatchers() {
 
 static void init_config() {
     addConfigValue(CStringValue, "layout", "layout", "grid");
+    addConfigValue(CIntValue, "smooth_preview_scaling", "filter downscaled overview surfaces", 0);
 
     // general
     addConfigValue(CIntValue, "bg_color", "background color", 0x000000FF);

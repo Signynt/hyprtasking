@@ -26,6 +26,7 @@ incdir = []
 dependencies = [
   dependency('pixman-1'),
   dependency('libdrm'),
+  dependency('glesv2'),
   dependency('pangocairo'),
   dependency('libinput'),
   dependency('libudev'),
